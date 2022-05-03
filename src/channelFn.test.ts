@@ -1,4 +1,4 @@
-import { Number, String } from "./channelFn";
+import { List, Number, String } from "./channelFn";
 
 test("basic addition", () => {
   // Simple add: 1 + 1 should equal 2
@@ -71,4 +71,53 @@ test("channel update calculated lazily", () => {
   expect(sumUpdate).toHaveBeenCalledTimes(1);
   expect(number1DataGet).toHaveBeenCalledTimes(1);
   expect(number2DataGet).toHaveBeenCalledTimes(1);
+});
+
+test("list map", () => {
+  // Double all the elements of a list with a map function
+  const list = new List([1, 2, 3]);
+  const listDoubled = list.map((x) => x * 2);
+  expect(listDoubled.data).toEqual([2, 4, 6]);
+
+  // Set the list to something new
+  list.data = [5];
+  // The doubled result should now reflect the new data
+  expect(listDoubled.data).toEqual([10]);
+
+  // Set the list to empty data
+  list.data = [];
+  // The doubled result should also be empty
+  expect(listDoubled.data).toEqual([]);
+});
+
+test("fine-grained list updates", () => {
+  // Double all the elements of a list with a map function
+  const list = new List([1, 2, 3]);
+  const listDoubled = list.map((x) => x * 2);
+  expect(listDoubled.data).toEqual([2, 4, 6]);
+
+  // Spy on the overall update function
+  const updateFunction = jest.spyOn(listDoubled, "updateFunction");
+  // Spy on the index update function
+  const updateIndexFunction = jest.spyOn(listDoubled, "updateIndexFunction");
+
+  // Set the item at index 1 to 10 and the item at index 2 to 20
+  list.setItem(1, 10);
+  list.setItem(2, 20);
+
+  // Nothing should update at this point
+  expect(updateFunction).toHaveBeenCalledTimes(0);
+  expect(updateIndexFunction).toHaveBeenCalledTimes(0);
+
+  // Now, retrieve the updated data to call the updaters
+  expect(listDoubled.data).toEqual([2, 20, 40]);
+
+  // Only the update index function should be called
+  expect(updateFunction).toHaveBeenCalledTimes(0);
+  expect(updateIndexFunction).toHaveBeenCalledTimes(2);
+
+  // Retrieving the data again should result in no additional calls
+  expect(listDoubled.data).toEqual([2, 20, 40]);
+  expect(updateFunction).toHaveBeenCalledTimes(0);
+  expect(updateIndexFunction).toHaveBeenCalledTimes(2);
 });

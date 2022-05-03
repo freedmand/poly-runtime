@@ -13,6 +13,34 @@
  *   that is connected to the age channel. Automatic channels cannot be changed
  */
 
+import {
+  indexAll,
+  indexEmpty,
+  indexHas,
+  indexNone,
+  IndexSpecifier,
+  Key,
+  mergeIndexSpecifiers,
+} from "./indexSpecifier";
+
+/**
+ * A channel connector describes a connection between an incoming channel and an
+ * outgoing channel in terms of how indices are connected. The connector is a
+ * function that takes the {@link IndexSpecifier} for an incoming channel and
+ * returns an {@link IndexSpecifier} describing where those indices affect the
+ * outgoing channel.
+ */
+type ChannelConnector = (index: IndexSpecifier) => IndexSpecifier;
+
+/**
+ * A collection of an outgoing channel and its associated
+ * {@link ChannelConnector} object
+ */
+type ChannelWithConnector<T> = {
+  channel: Channel<T>;
+  connector: ChannelConnector;
+};
+
 /**
  * A channel is a generic data structure for storing and flowing data. It is a
  * way to efficiently communicate when data changes and provide ways to respond
@@ -21,9 +49,9 @@
 export abstract class Channel<DataType> {
   /**
    * All the downstream connected channels that respond to updates from this
-   * channel.
+   * channel and their {@link ChannelConnector}s
    */
-  public connectedChannels: Channel<any>[] = [];
+  public connectedChannels: ChannelWithConnector<any>[] = [];
 
   /**
    * The last output of data that this channel precalculated. If the data is
@@ -36,7 +64,7 @@ export abstract class Channel<DataType> {
    * Whether the cached data is still current. When a parent channel has an
    * update, this channel will be marked as dirty so the data will rerender.
    */
-  protected abstract dirty: boolean;
+  protected abstract dirty: IndexSpecifier;
 
   /**
    * The underlying data stored in the channel.
@@ -47,11 +75,12 @@ export abstract class Channel<DataType> {
    * Marks the channel as dirty, and triggers changes to all connected channels
    * downstream recursively.
    */
-  markDirty() {
-    this.dirty = true;
-    for (const channel of this.connectedChannels) {
-      // Recursively mark all downstream channels as dirty
-      channel.markDirty();
+  markDirty(indexSpecifier: IndexSpecifier = indexAll) {
+    this.dirty = mergeIndexSpecifiers(this.dirty, indexSpecifier);
+    for (const { channel, connector } of this.connectedChannels) {
+      // Recursively mark all downstream channels as dirty (uses the channel's
+      // connector to mark the appropriate indices as dirty)
+      channel.markDirty(connector(indexSpecifier));
     }
   }
 }
@@ -81,7 +110,7 @@ export class DataChannel<DataType> extends Channel<DataType> {
    */
   protected _data: DataType;
 
-  protected dirty = false;
+  protected dirty: IndexSpecifier = indexNone;
   protected cachedData;
 
   /**
@@ -109,9 +138,10 @@ export class DataChannel<DataType> extends Channel<DataType> {
     this._data = data;
 
     // Notify any downstream channels that are connected
-    for (const channel of this.connectedChannels) {
-      // Mark the channel as dirty
-      channel.markDirty();
+    for (const { channel, connector } of this.connectedChannels) {
+      // Mark the channel as dirty using the connector to mark the appropriate
+      // indices as dirty
+      channel.markDirty(connector(indexAll));
     }
   }
 }
@@ -130,20 +160,35 @@ export class AutomaticChannel<
   DataType,
   IncomingChannelType extends Channel<any>[] | [Channel<any>]
 > extends Channel<DataType> {
-  protected dirty = true;
+  protected dirty: IndexSpecifier = indexAll;
   protected cachedData: DataType = undefined!;
+
+  readonly incomingConnectors: ChannelConnector[];
 
   /**
    * @param incomingChannels An array of incoming channels
    * @param updateFunction An update function that takes as input data
-   *     corresponding to each incoming channel's data and outputs data for
-   *     this channel.
+   *     corresponding to each incoming channel's data and outputs data for this
+   *     channel.
+   * @param connectorMap An optional mapping of {@link ChannelConnector}s to
+   * apply for each corresponding incoming channel
+   * @param updateIndexFunction An optional function to update just a specified
+   * index of data that takes in the incoming data, the current cached data
+   * value, and the index to modify. The function does not return anything; it
+   * just modifies the cached data in place (it's the caller's responsibility to
+   * perform this modification)
    */
   constructor(
     readonly incomingChannels: IncomingChannelType,
     readonly updateFunction: (
       ...incomingData: ChannelListDataType<IncomingChannelType>
-    ) => DataType
+    ) => DataType,
+    readonly connectorMap: ChannelConnector[] = [],
+    readonly updateIndexFunction?: (
+      incomingData: ChannelListDataType<IncomingChannelType>,
+      cachedData: DataType,
+      index: Key
+    ) => void
   ) {
     // Ensure there are incoming channels
     if (incomingChannels.length === 0) {
@@ -154,9 +199,24 @@ export class AutomaticChannel<
 
     super();
 
+    // Derive the incoming connectors (if no connectors are provided or there's
+    // missing elements, they are subbed in with connectors that always return
+    // indexAll)
+    this.incomingConnectors = incomingChannels.map((_, i) =>
+      i >= connectorMap.length ? () => indexAll : connectorMap[i]
+    );
+
     // Connect the channel to all incoming channels
-    for (const incomingChannel of this.incomingChannels) {
-      incomingChannel.connectedChannels.push(this);
+    for (let i = 0; i < this.incomingChannels.length; i++) {
+      // Grab the corresponding incoming channel and connector
+      const incomingChannel = this.incomingChannels[i];
+      const connector = this.incomingConnectors[i];
+
+      // Hook the ChannelWithConnector into each incoming channel
+      incomingChannel.connectedChannels.push({
+        channel: this,
+        connector,
+      });
     }
   }
 
@@ -165,25 +225,39 @@ export class AutomaticChannel<
    * the update function. Only channels that are dirty need to be recalculated.
    */
   get data(): DataType {
-    if (!this.dirty) {
-      // If this does not have to refresh its value, return the cached data
+    // Dirty is empty when there is no new data to calculate
+    if (indexEmpty(this.dirty)) {
+      // Simply return the previously cached data
       return this.cachedData;
     }
 
-    // Refresh the value
+    // Grab all the incoming data
     const incomingData = this.incomingChannels.map((incomingChannel) => {
       return incomingChannel.data;
     }) as ChannelListDataType<IncomingChannelType>;
 
     // Run the update function to calculate the new data
-    const newData = this.updateFunction(...incomingData);
+    if (
+      this.dirty.indexType === "Indices" &&
+      this.updateIndexFunction != null
+    ) {
+      // If only specified indices are dirty, update each index that needs to be
+      // recalculated individually (the cache is updated in-place by the update
+      // index function)
+      for (const index of this.dirty.indices) {
+        this.updateIndexFunction(incomingData, this.cachedData, index);
+      }
+    } else {
+      // Otherwise, calculate all the new data
+      const newData = this.updateFunction(...incomingData);
+      // Store the new data in the cache
+      this.cachedData = newData;
+    }
 
-    // Store the new data in the cache
-    this.cachedData = newData;
     // Data is no longer dirty since the cache is current
-    this.dirty = false;
+    this.dirty = indexNone;
 
-    // Return the data
+    // Return the now-cached data
     return this.cachedData;
   }
 }
