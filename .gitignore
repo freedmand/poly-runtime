@@ -1,6 +1,12 @@
 node_modules
+
+# Hide all .-prefixed files except gitignore and vscode configuration
 .*
 !.gitignore
 !.vscode
 .vscode/*
 !.vscode/launch.json
+
+# Hide all public generated files except index.html
+public/*
+!public/index.html
