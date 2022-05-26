@@ -4,13 +4,15 @@
   "main": "index.js",
   "scripts": {
     "test": "jest",
-    "test-watch": "jest --watchAll"
+    "test-watch": "jest --watchAll",
+    "dev": "tsup src/index.ts -d public --watch"
   },
   "author": "Dylan Freedman",
   "license": "MIT",
   "description": "",
   "devDependencies": {
     "@types/jest": "^27.4.1",
-    "ts-jest": "^27.1.4"
+    "ts-jest": "^27.1.4",
+    "tsup": "^6.0.1"
   }
 }

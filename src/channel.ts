@@ -16,7 +16,6 @@
 import {
   indexAll,
   indexEmpty,
-  indexHas,
   indexNone,
   IndexSpecifier,
   Key,
@@ -47,6 +46,14 @@ type ChannelWithConnector<T> = {
  * to data updates.
  */
 export abstract class Channel<DataType> {
+  /**
+   * If set to true, eagerly fetches any data changes instead of waiting lazily
+   * to load downstream data updates only when data is requested. This is useful
+   * for implementing listeners/watchers that need to reflect changes
+   * immediately.
+   */
+  public eager: boolean = false;
+
   /**
    * All the downstream connected channels that respond to updates from this
    * channel and their {@link ChannelConnector}s
@@ -81,6 +88,11 @@ export abstract class Channel<DataType> {
       // Recursively mark all downstream channels as dirty (uses the channel's
       // connector to mark the appropriate indices as dirty)
       channel.markDirty(connector(indexSpecifier));
+    }
+
+    if (this.eager) {
+      // Retrieve the data eagerly if updates or callbacks are necessary
+      this.data;
     }
   }
 }
@@ -117,7 +129,7 @@ export class DataChannel<DataType> extends Channel<DataType> {
    * Initializes the channel with data
    * @param data The initial data in the channel
    */
-  constructor(data: DataType) {
+  constructor(data: DataType, public eager = false) {
     super();
     this.cachedData = data;
     this._data = data;
@@ -188,7 +200,8 @@ export class AutomaticChannel<
       incomingData: ChannelListDataType<IncomingChannelType>,
       cachedData: DataType,
       index: Key
-    ) => void
+    ) => void,
+    public eager = false
   ) {
     // Ensure there are incoming channels
     if (incomingChannels.length === 0) {
