@@ -1,11 +1,36 @@
 import { AutomaticChannel, Channel } from "./channel";
 
+// type ChildType = Element | Fragment | null | ChildType[] | Channel<ChildType>;
+
+// export function* iterateChildren(
+//   childLike: ChildType
+// ): Iterable<Element | Fragment> {
+//   if (childLike != null) {
+//     if (Array.isArray(childLike)) {
+//       for (const subChildLike of childLike) {
+//         iterateChildren(subChildLike);
+//       }
+//     } else {
+//       yield childLike;
+//     }
+//   }
+// }
+
 /**
  * The type description of an element
  */
 export interface ElementType {
   tag: string;
+  attributes: Attribute[];
   children: (Element | Fragment)[];
+}
+
+export type Attribute = GeneralAttribute;
+
+export interface GeneralAttribute {
+  type: "GeneralAttribute";
+  key: string;
+  value: string;
 }
 
 /**
@@ -72,7 +97,7 @@ export class Fragment extends BaseDOM<string, [Channel<string>]> {
  */
 export class Element extends BaseDOM<
   ElementType,
-  [Channel<(Element | Fragment)[]>]
+  [Channel<Attribute[]>, Channel<(Element | Fragment)[]>]
 > {
   render(): HTMLElement {
     const data = this.data;
@@ -108,22 +133,27 @@ export class Element extends BaseDOM<
     }
   }
 
-  constructor(readonly tag: string, children: Channel<(Element | Fragment)[]>) {
+  constructor(
+    readonly tag: string,
+    attributes: Channel<Attribute[]>,
+    children: Channel<(Element | Fragment)[]>
+  ) {
     super(
-      [children],
-      (children) => {
+      [attributes, children],
+      (attributes, children) => {
         if (this.node != null) {
           // Update everything upon receiving an update
-          this.update(this.node, children);
+          this.update(this.node, attributes, children);
         }
         // Return a description of the element
         return {
           tag,
+          attributes,
           children,
         };
       },
       [(index) => index],
-      (items, _, index) => {
+      (items, data, index) => {
         if (this.node != null) {
           // Update just the children that changed
           this.updateIndex(

@@ -206,6 +206,31 @@ export class Dictionary<Value> extends DataChannel<Record<Key, Value>> {
   }
 }
 
+type NestedList<T> = T | null | Channel<NestedList<T>[]>;
+
+function flattenList<T>(nestedList: NestedList<T>, results: T[] = []): T[] {
+  if (nestedList != null) {
+    if (nestedList instanceof Channel) {
+      const data = nestedList.data;
+      for (const list of data) {
+        flattenList(list, results);
+      }
+    } else {
+      results.push(nestedList);
+    }
+  }
+  return results;
+}
+
+export class FlatList<T> extends AutomaticChannel<
+  T[],
+  [Channel<NestedList<T>>]
+> {
+  constructor(incomingChannel: Channel<NestedList<T>>) {
+    super([incomingChannel], (incomingData) => flattenList(incomingData));
+  }
+}
+
 /**
  * The fully unraveled data type for a channel. If the channel's data type
  * includes other channels, these are in turn unraveled recursively.

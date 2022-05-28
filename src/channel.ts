@@ -22,6 +22,32 @@ import {
   mergeIndexSpecifiers,
 } from "./indexSpecifier";
 
+export type Operation = Clear | Splice | Swap | Move;
+
+export interface Clear {
+  type: "Clear";
+  indices: IndexSpecifier;
+}
+
+export interface Splice {
+  type: "Splice";
+  start: number;
+  deleteCount: number;
+  insertCount: number;
+}
+
+export interface Swap {
+  type: "Swap";
+  index1: number;
+  index2: number;
+}
+
+export interface Move {
+  type: "Move";
+  index: number;
+  insert: number;
+}
+
 /**
  * A channel connector describes a connection between an incoming channel and an
  * outgoing channel in terms of how indices are connected. The connector is a
@@ -29,7 +55,10 @@ import {
  * returns an {@link IndexSpecifier} describing where those indices affect the
  * outgoing channel.
  */
-type ChannelConnector = (index: IndexSpecifier) => IndexSpecifier;
+type ChannelConnector<T> = (
+  channelIndex: number,
+  operation: Operation
+) => [(cachedData: T) => void, IndexSpecifier];
 
 /**
  * A collection of an outgoing channel and its associated
@@ -37,7 +66,7 @@ type ChannelConnector = (index: IndexSpecifier) => IndexSpecifier;
  */
 type ChannelWithConnector<T> = {
   channel: Channel<T>;
-  connector: ChannelConnector;
+  connector: ChannelConnector<T>;
 };
 
 /**
@@ -45,7 +74,7 @@ type ChannelWithConnector<T> = {
  * way to efficiently communicate when data changes and provide ways to respond
  * to data updates.
  */
-export abstract class Channel<DataType> {
+export abstract class Channel<DataType, OperatorType> {
   /**
    * If set to true, eagerly fetches any data changes instead of waiting lazily
    * to load downstream data updates only when data is requested. This is useful
@@ -82,12 +111,18 @@ export abstract class Channel<DataType> {
    * Marks the channel as dirty, and triggers changes to all connected channels
    * downstream recursively.
    */
-  markDirty(indexSpecifier: IndexSpecifier = indexAll) {
+  markDirty(operation: Operation) {
     this.dirty = mergeIndexSpecifiers(this.dirty, indexSpecifier);
-    for (const { channel, connector } of this.connectedChannels) {
+    for (let i = 0; i < this.connectedChannels.length; i++) {
+      const { channel, connector } = this.connectedChannels[i];
       // Recursively mark all downstream channels as dirty (uses the channel's
       // connector to mark the appropriate indices as dirty)
-      channel.markDirty(connector(indexSpecifier));
+      const [cachedDataModifier, indices] = connector(i, {
+        type: "Dirty",
+        indices: indexSpecifier,
+      });
+      cachedDataModifier(this.cachedData);
+      channel.markDirty(indices);
     }
 
     if (this.eager) {
